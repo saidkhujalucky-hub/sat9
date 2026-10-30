@@ -1,0 +1,1 @@
+{"name":"sat-cloudflare","private":true,"type":"module","scripts":{"dev":"wrangler dev","deploy":"wrangler deploy","build:pages":"node scripts/build-pages.mjs","db:init":"wrangler d1 execute sat-platform-db --remote --file=schema.sql"},"devDependencies":{"wrangler":"^4.50.0"}}

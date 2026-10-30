@@ -1,0 +1,20 @@
+# Имя Worker должно совпадать с именем проекта в Cloudflare (у тебя: sat8)
+name = "sat8"
+main = "worker/index.mjs"
+compatibility_date = "2026-10-30"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# database_id СПЕЦИАЛЬНО не указан: Wrangler 4.45+ при `wrangler deploy`
+# сам создаёт (или находит) базу D1 и подставляет ID. Таблицы Worker создаёт сам.
+[[d1_databases]]
+binding = "DB"
+database_name = "sat-platform-db"
+
+[vars]
+PAYMENT_MODE = "manual"
+PREMIUM_PRICE_UZS = "19000"
+NODE_ENV = "production"
