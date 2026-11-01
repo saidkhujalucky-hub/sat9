@@ -1,20 +1,12 @@
 import { readFileSync } from 'node:fs';
-import { lessonMap } from './content.mjs';
+import { lessonMap, topicLessons } from './content.mjs';
 
 export const catalog = JSON.parse(readFileSync(new URL('./private/official-variants.json', import.meta.url)));
 export const refs = new Map();
 for (const variant of catalog.variants) for (const [section, branches] of Object.entries(variant.sections)) {
   for (const branch of Object.values(branches)) for (const q of branch) refs.set(q.id, { ...q, section });
 }
-const topics = {
-  'Linear equations in one variable':'linear',
-  'Linear functions':'slope',
-  'Percentages':'percent',
-  'Transitions':'transitions',
-  'Central Ideas and Details':'mainidea',
-  'Form, Structure, and Sense':'agreement'
-};
-export function lessonForRef(ref) { return topics[ref?.topic?.trim()] || null; }
+export function lessonForRef(ref) { return topicLessons[ref?.topic?.trim()] || null; }
 export function fault(status, message) { const e = Error(message); e.status = status; throw e; }
 export function numberValue(value) {
   const s = String(value ?? '').trim().replace(/−/g,'-').replace(',','.');
@@ -28,7 +20,7 @@ export function correct(q, value) {
   const n = numberValue(value);
   return Number.isFinite(n) && q.answers.some(a=>Number.isFinite(numberValue(a)) && Math.abs(n-numberValue(a)) <= 1e-9*Math.max(1,Math.abs(numberValue(a))));
 }
-export function questionService(env = process.env) {
+export function questionService(env = process.env, store = null) {
   // Test fixtures are opt-in and impossible to activate in production.
   const fixture = env.NODE_ENV === 'test' && env.QUESTION_FIXTURE ? JSON.parse(readFileSync(env.QUESTION_FIXTURE)) : null;
   const cache = new Map(), pending = new Map();
@@ -38,20 +30,29 @@ export function questionService(env = process.env) {
     if (pending.has(id)) return pending.get(id);
     const task = (async()=>{
       let raw;
+      const persisted=!fixture&&store?await store.get('question_cache',id):null;
+      if(persisted?.question&&Date.now()-persisted.created<7*86400000){cache.set(id,persisted.question);return persisted.question;}
       if (fixture) raw = fixture[id];
       else {
         let response;
-        try { response = await fetch('https://qbank-api.collegeboard.org/msreportingquestionbank-prod/questionbank/digital/get-question', { method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({external_id:id}),signal:AbortSignal.timeout(20000) }); }
-        catch { fault(503,'QUESTION_SOURCE_UNAVAILABLE'); }
-        if (!response.ok) fault(503,'QUESTION_SOURCE_UNAVAILABLE');
-        raw = await response.json();
+        for(let attempt=0;attempt<2;attempt++){
+          try{response=await fetch('https://qbank-api.collegeboard.org/msreportingquestionbank-prod/questionbank/digital/get-question',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({external_id:id}),signal:AbortSignal.timeout(12000)});if(response.ok)break;if(response.status<500&&response.status!==429)break;}catch{}
+        }
+        if(!response?.ok){
+          if(persisted?.question&&Date.now()-persisted.created<30*86400000){cache.set(id,persisted.question);return persisted.question;}
+          fault(503,'QUESTION_SOURCE_UNAVAILABLE');
+        }
+        try{raw=await response.json();}catch{fault(503,'QUESTION_SOURCE_UNAVAILABLE');}
+
       }
       if (!raw || !['mcq','spr'].includes(raw.type) || typeof raw.stem !== 'string') fault(503,'QUESTION_SOURCE_UNAVAILABLE');
       const ref = refs.get(id);
       const q = { id, type:raw.type==='spr'?'numeric':'mcq',passage:String(raw.stimulus||''),prompt:raw.stem,options:(raw.answerOptions||[]).map((o,i)=>({letter:'ABCD'[i],html:String(o.content||'')})),answers:(Array.isArray(raw.correct_answer)?raw.correct_answer:[raw.correct_answer]).filter(v=>v!=null).map(String),explanation:String(raw.rationale||''),skill:lessonForRef(ref)||ref.topic,lessonId:lessonForRef(ref),topic:ref.topic,section:ref.section,difficulty:ref.difficulty,sourceId:ref.sourceId };
       if (!q.answers.length || q.type==='mcq' && (q.options.length!==4 || q.options.some(o=>!o.html))) fault(503,'QUESTION_SOURCE_UNAVAILABLE');
       if (cache.size >= 600) cache.delete(cache.keys().next().value);
-      cache.set(id,q); return q;
+      cache.set(id,q);
+      if(store&&!fixture){const row={id,question:q,created:Date.now()};if(persisted)await store.change('question_cache',id,()=>row);else try{await store.insert('question_cache',row);}catch(e){if(!await store.get('question_cache',id))throw e;}}
+      return q;
     })();
     pending.set(id,task);
     try { return await task; } finally { pending.delete(id); }
