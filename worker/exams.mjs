@@ -10,11 +10,12 @@ export const moduleRefs = (a,index=a.index) => {
 };
 export function examService(store,questions,bill) {
   async function check(user,variant) { if(!Number.isInteger(variant)||!catalog.variants.some(v=>v.id===variant))fault(400,'INVALID_VARIANT');if(variant!==1){if(user.guest)fault(401,'LOGIN_REQUIRED');await bill.requirePremium(user.id);} }
-  async function create(user,variant) {
+  async function create(user,variant,mode='exam') {
+    if(!['exam','training'].includes(mode))fault(400,'INVALID_MODE');
     await check(user,variant);
-    const existing=(await store.list('exams',{userId:user.id})).filter(a=>a.test===variant&&a.stage!=='done').sort((a,b)=>b.startedAt-a.startedAt)[0];
+    const existing=(await store.list('exams',{userId:user.id})).filter(a=>a.test===variant&&(a.mode||'exam')===mode&&a.stage!=='done').sort((a,b)=>b.startedAt-a.startedAt)[0];
     if(existing)return existing;
-    const a={id:randomUUID(),userId:user.id,test:variant,stage:'module',index:0,answers:{},flags:{},crossed:{},routing:{rw:null,math:null},grades:[],startedAt:Date.now(),endsAt:Date.now()+catalog.modules[0].seconds*1000,breakEnd:null,current:0,updatedAt:Date.now()};
+    const a={id:randomUUID(),userId:user.id,test:variant,mode,stage:'module',index:0,answers:{},flags:{},crossed:{},routing:{rw:null,math:null},grades:[],startedAt:Date.now(),endsAt:Date.now()+catalog.modules[0].seconds*1000,breakEnd:null,current:0,updatedAt:Date.now()};
     await store.insert('exams',a);return a;
   }
   async function get(user,id) {
@@ -25,7 +26,7 @@ export function examService(store,questions,bill) {
     return store.change('exams',id,a=>{
       if(a.stage!=='module')return a;
       if(d.index!==a.index)fault(409,'STALE_MODULE');
-      if(Date.now()>a.endsAt)fault(409,'MODULE_EXPIRED');
+      if(a.mode!=='training'&&Date.now()>a.endsAt)fault(409,'MODULE_EXPIRED');
       const refs=moduleRefs(a);
       for(const ref of refs){
         if(d.answers&&Object.hasOwn(d.answers,ref.id)){
@@ -66,14 +67,15 @@ export function examService(store,questions,bill) {
   }
   async function ensureEvents(a) {
     if(a.stage!=='done'||a.eventsRecorded)return;
-    for(let index=0;index<4;index++)for(const ref of moduleRefs(a,index)){
-      const event={id:a.id+':'+ref.id,userId:a.userId,question:ref.id,skill:ref.topic,lesson:questionsLesson(ref),correct:a.grades[index].items.find(i=>i.id===ref.id)?.correct?1:0,created:a.completedAt,source:'exam:'+a.id,reason:null};
-      await insertOnce(store,'events',event);
-      if(!event.correct&&event.lesson){
-        const id=a.userId+':'+event.lesson,old=await store.get('reviews',id);
-        if(!old)await insertOnce(store,'reviews',{id,userId:a.userId,skill:event.lesson,stage:0,due:a.completedAt+DAY,lastEvent:a.completedAt});
-        else if((old.lastEvent||0)<a.completedAt)await store.change('reviews',id,r=>(r.lastEvent||0)<a.completedAt?{...r,stage:0,due:a.completedAt+DAY,lastEvent:a.completedAt}:r);
-      }
+    const events=[];
+    for(let index=0;index<4;index++)for(const ref of moduleRefs(a,index))events.push({id:a.id+':'+ref.id,userId:a.userId,question:ref.id,skill:ref.topic,lesson:questionsLesson(ref),correct:a.grades[index].items.find(i=>i.id===ref.id)?.correct?1:0,created:a.completedAt,source:'exam:'+a.id,reason:null});
+    if(store.insertMany)await store.insertMany('events',events);else for(const event of events)await insertOnce(store,'events',event);
+    const reviews=new Map((await store.list('reviews',{userId:a.userId})).map(r=>[r.id,r]));
+    const weak=[...new Set(events.filter(e=>!e.correct&&e.lesson).map(e=>e.lesson))];
+    for(const lesson of weak){
+      const id=a.userId+':'+lesson,old=reviews.get(id);
+      if(!old)await insertOnce(store,'reviews',{id,userId:a.userId,skill:lesson,stage:0,due:a.completedAt+DAY,lastEvent:a.completedAt});
+      else if((old.lastEvent||0)<a.completedAt)await store.change('reviews',id,r=>(r.lastEvent||0)<a.completedAt?{...r,stage:0,due:a.completedAt+DAY,lastEvent:a.completedAt}:r);
     }
     await store.change('exams',a.id,current=>({...current,eventsRecorded:true}));
   }
