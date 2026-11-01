@@ -1,3 +1,5 @@
+import {accountService} from '../server/accounts.mjs';
+import {translationService} from '../server/translation.mjs';
 
 import { scrypt as scryptCb, randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
@@ -10,20 +12,22 @@ import { lessons, lessonMap } from '../server/content.mjs';
 import { catalog, refs, lessonForRef, questionService, correct, fault as fail } from './questions.mjs';
 import { examService } from './exams.mjs';
 
-let store,bill,questions,exams;
+const json=(res,status,data)=>{res.status=status;res.headers['Content-Type']='application/json; charset=utf-8';res.headers['Cache-Control']='no-store';res.data=data;};
+function createServices(env){
+const store=openStore(env.DB),bill=billing(store,env),questions=questionService(env,store),exams=examService(store,questions,bill);
 const day=86400000,scrypt=promisify(scryptCb),hash=x=>createHash('sha256').update(x).digest('hex');
 const limits=new Map();
-function limit(key,max,ms=600000){const now=Date.now(),old=limits.get(key);if(!old||old.until<now){limits.set(key,{until:now+ms,n:1});return;}if(++old.n>max)fail(429,'RATE_LIMIT');}
+function limit(key,max,ms=600000){const now=Date.now();if(limits.size>5000)for(const[k,v]of limits)if(v.until<now)limits.delete(k);const old=limits.get(key);if(!old||old.until<now){limits.set(key,{until:now+ms,n:1});return;}if(++old.n>max)fail(429,'RATE_LIMIT');}
 
-const json=(res,status,data)=>{res.status=status;res.headers['Content-Type']='application/json; charset=utf-8';res.headers['Cache-Control']='no-store';res.data=data;};
-async function body(req){const raw=await req.request.text();if(raw.length>262144)fail(413,'BODY_TOO_LARGE');try{const d=raw?JSON.parse(raw):{};if(!d||typeof d!=='object'||Array.isArray(d))fail(400,'INVALID_JSON');return d;}catch{fail(400,'INVALID_JSON');}}
+
+async function body(req){const declared=Number(req.request.headers.get('Content-Length'));if(declared>262144)fail(413,'BODY_TOO_LARGE');const raw=await req.request.text();if(new TextEncoder().encode(raw).length>262144)fail(413,'BODY_TOO_LARGE');try{const d=raw?JSON.parse(raw):{};if(!d||typeof d!=='object'||Array.isArray(d))fail(400,'INVALID_JSON');return d;}catch{fail(400,'INVALID_JSON');}}
 async function userOf(req,optional=false){
   const token=(req.headers.authorization||'').replace(/^Bearer /,'');
   const s=token&&await store.get('sessions',hash(token)),u=s&&s.expires>Date.now()&&await store.get('users',s.userId);
-  if(!u&&!optional)fail(401,'LOGIN_REQUIRED');return u||null;
+  const valid=u&&(s.authVersion||0)===(u.authVersion||0);if(!valid&&!optional)fail(401,'LOGIN_REQUIRED');return valid?u:null;
 }
-async function publicUser(u){return{id:u.id,email:u.email||'',name:u.name,guest:!!u.guest,settings:u.settings||{},subscription:await bill.subscription(u.id)};}
-async function session(u){const token=randomBytes(32).toString('hex'),expires=Date.now()+30*day;await store.insert('sessions',{id:hash(token),userId:u.id,expires,expiresAt:new Date(expires)});return{token,user:await publicUser(u)};}
+async function publicUser(u){return{id:u.id,email:u.email||'',name:u.name,guest:!!u.guest,emailVerified:!!u.emailVerified,settings:u.settings||{},subscription:await bill.subscription(u.id)};}
+async function session(u){const token=randomBytes(32).toString('hex'),expires=Date.now()+30*day;await store.insert('sessions',{id:hash(token),userId:u.id,authVersion:u.authVersion||0,expires,expiresAt:new Date(expires)});return{token,user:await publicUser(u)};}
 const realUser=u=>{if(u.guest)fail(401,'LOGIN_REQUIRED');};
 const canLesson=async(u,id)=>{realUser(u);if(!bill.config().freeLessons.includes(id))await bill.requirePremium(u.id);};
 const sorted=xs=>xs.sort((a,b)=>(b.updatedAt||b.created||b.startedAt||0)-(a.updatedAt||a.created||a.startedAt||0));
@@ -72,6 +76,15 @@ async function drillView(row){
 
 async function api(req,res,path){
   const method=req.method,d=['POST','PUT'].includes(method)?await body(req):{};
+  const accounts=accountService(store,env),translator=translationService(store,env);
+  if(path==='/features'&&method==='GET')return json(res,200,{lessonCount:lessons.length,email:accounts.mailReady,translation:!!env.AI});
+  if(['/auth/forgot','/auth/reset','/auth/verify'].includes(path)&&method==='POST'){
+    limit('recovery:'+req.ip,10);
+    if(path==='/auth/forgot')return json(res,200,await accounts.start(d.email,'reset'));
+    if(path==='/auth/verify')return json(res,200,await accounts.verify(d.token));
+    return json(res,200,await accounts.reset(d));
+  }
+
   if(path==='/health')return json(res,200,{ok:true,payments:bill.config().mode,database:store.kind});
   if(path==='/billing/config'&&method==='GET')return json(res,200,bill.config());
   if(path==='/payments/payme'&&method==='POST')return json(res,200,await bill.rpc(d,req.headers.authorization));
@@ -90,7 +103,7 @@ async function api(req,res,path){
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254||name.length<1||name.length>80||typeof d.password!=='string'||d.password.length<10||d.password.length>128)fail(400,'INVALID_REGISTRATION');
     const salt=randomBytes(16).toString('hex'),key=(await scrypt(d.password,salt,64)).toString('hex');
     const u={id:randomUUID(),email,name,password:salt+':'+key,guest:false,settings:{},created:Date.now()};
-    try{await store.insert('users',u);}catch(e){if(e.code===11000||(String(e.code).includes('SQLITE_CONSTRAINT') || [1555,2067].includes(e.errcode)))fail(409,'EMAIL_EXISTS');throw e;}
+    try{await store.insert('users',u);}catch(e){if(e.code===11000||(String(e.code).includes('SQLITE_CONSTRAINT') || [1555,2067].includes(e.errcode)||String(e).includes('UNIQUE constraint failed')))fail(409,'EMAIL_EXISTS');throw e;}
     return json(res,201,await session(u));
   }
   if(path==='/auth/login'&&method==='POST'){
@@ -102,6 +115,25 @@ async function api(req,res,path){
     return json(res,200,await session(u));
   }
   const u=await userOf(req);limit('api:'+u.id,1500,60000);
+  if(path==='/auth/recovery-code'&&method==='POST'){realUser(u);limit('recovery-code:'+u.id,5);return json(res,200,await accounts.recovery(u));}
+  if(path==='/auth/send-verification'&&method==='POST'){realUser(u);limit('verification:'+u.id,5);return json(res,200,await accounts.start(u.email,'verify'));}
+  const tm=path.match(/^\/translations\/(exams|drills)\/([\w-]+)\/([\w-]+)$/);
+  if(tm&&method==='POST'){
+    limit('translation:'+u.id,60,3600000);
+    let canExplain=false;
+    if(tm[1]==='exams'){
+      const attempt=await exams.get(u,tm[2]);
+      if(attempt.mode!=='training'&&attempt.stage!=='done')fail(403,'TRANSLATION_EXAM_FORBIDDEN');
+      await exams.question(u,tm[2],tm[3]);canExplain=attempt.stage==='done';
+    }else{
+      const drill=await store.get('drills',tm[2]);
+      if(!drill||drill.userId!==u.id||!drill.questions.includes(tm[3]))fail(404,'DRILL_NOT_FOUND');
+      await canLesson(u,drill.skill);canExplain=!!drill.results[tm[3]];
+    }
+    if(d.explanation&&!canExplain)fail(403,'ANSWER_NOT_REVIEWABLE');
+    return json(res,200,await translator.translate(await questions.load(tm[3]),d.lang,d.explanation===true));
+  }
+
   if(path==='/auth/me'&&method==='GET')return json(res,200,await publicUser(u));
   if(path==='/auth/logout'&&method==='POST'){await store.remove('sessions',hash(req.headers.authorization.replace(/^Bearer /,'')));return json(res,200,{ok:true});}
   if(path==='/billing/subscription'&&method==='GET')return json(res,200,await bill.subscription(u.id));
@@ -109,7 +141,7 @@ async function api(req,res,path){
   if(path==='/billing/orders'&&method==='POST'){limit('orders:'+u.id,30);return json(res,201,await bill.order(u,d.lang,d.idempotencyKey));}
   const om=path.match(/^\/billing\/orders\/([\w-]+)(?:\/(demo))?$/);
   if(om){realUser(u);if(om[2]&&method==='POST')return json(res,200,await bill.demo(om[1],u.id,d.success===true));if(method!=='GET')fail(405,'METHOD_NOT_ALLOWED');const o=await store.get('orders',om[1]);if(!o||o.userId!==u.id)fail(404,'ORDER_NOT_FOUND');return json(res,200,{...bill.view(o),subscription:await bill.subscription(u.id)});}
-  if(path==='/exams'&&method==='POST')return json(res,201,await exams.create(u,Number(d.variant)));
+  if(path==='/exams'&&method==='POST')return json(res,201,await exams.create(u,Number(d.variant),d.mode||'exam'));
   const em=path.match(/^\/exams\/([\w-]+)(?:\/(state|finish|continue|question\/([\w-]+)))?$/);
   if(em){
     if(!em[2]&&method==='GET')return json(res,200,await exams.get(u,em[1]));
@@ -129,7 +161,7 @@ async function api(req,res,path){
   }
   if(path==='/lessons'&&method==='GET'){
     const premium=(await bill.subscription(u.id)).active;
-    return json(res,200,lessons.map(({explain,rules,example,mistakes,...rest})=>({...rest,locked:!premium&&!bill.config().freeLessons.includes(rest.id)})));
+    return json(res,200,lessons.map(({explain,rules,example,mistakes,practice,...rest})=>({...rest,locked:!premium&&!bill.config().freeLessons.includes(rest.id)})));
   }
   const lm=path.match(/^\/lessons\/([a-z]+)(?:\/(complete))?$/);
   if(lm){
@@ -174,21 +206,27 @@ async function api(req,res,path){
   if(path.startsWith('/attempts')||path.startsWith('/legacy')||path==='/meta')fail(410,'REMOVED');
   fail(404,'NOT_FOUND');
 }
+return {api};
+}
+const services=new WeakMap();
 const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS documents (collection TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(collection,id))",
  "CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(collection,json_extract(body,'$.userId'))",
  "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON documents(json_extract(body,'$.email')) WHERE collection='users' AND json_extract(body,'$.guest')=0",
  "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_provider ON documents(json_extract(body,'$.providerId')) WHERE collection='orders' AND json_extract(body,'$.providerId') IS NOT NULL"
 ];
-let schemaReady=null;
-function ensureSchema(db){if(!schemaReady)schemaReady=db.batch(SCHEMA.map(q=>db.prepare(q))).catch(e=>{schemaReady=null;throw e;});return schemaReady;}
-// Токен передаётся в заголовке Authorization (не в cookie), поэтому CORS можно открыть для GitHub Pages.
-const cors=(request,env)=>({'Access-Control-Allow-Origin':env.ALLOWED_ORIGINS||'*','Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type,Authorization','Access-Control-Max-Age':'86400','Vary':'Origin'});
+const schemas=new WeakMap();
+function ensureSchema(db){if(!schemas.has(db))schemas.set(db,db.batch(SCHEMA.map(q=>db.prepare(q))).catch(e=>{schemas.delete(db);throw e;}));return schemas.get(db);}
+function cors(request,env){
+ const origin=request.headers.get('Origin'),allowed=(env.ALLOWED_ORIGINS||'').split(',').map(x=>x.trim()).filter(Boolean);
+ return {'Access-Control-Allow-Origin':!allowed.length?'*':allowed.includes(origin)?origin:allowed[0],'Access-Control-Allow-Methods':'GET,POST,PUT,OPTIONS','Access-Control-Allow-Headers':'Content-Type,Authorization','Access-Control-Max-Age':'86400','Vary':'Origin'};
+}
 export async function handle(request,env){
  if(request.method==='OPTIONS')return new Response(null,{status:204,headers:cors(request,env)});
  if(!env.DB)return new Response(JSON.stringify({error:'D1_NOT_BOUND'}),{status:500,headers:{'Content-Type':'application/json',...cors(request,env)}});
  try{await ensureSchema(env.DB);}catch(e){console.error(e);return new Response(JSON.stringify({error:'DB_INIT_FAILED'}),{status:500,headers:{'Content-Type':'application/json',...cors(request,env)}});}
- store=openStore(env.DB);bill=billing(store,env);questions=questionService(env);exams=examService(store,questions,bill);
+ if(!services.has(env.DB))services.set(env.DB,createServices(env));
+ const {api}=services.get(env.DB);
  const url=new URL(request.url),path=url.pathname.slice(4);
  const req={request,method:request.method,headers:{authorization:request.headers.get('Authorization')||'',origin:request.headers.get('Origin')||''},ip:request.headers.get('CF-Connecting-IP')||'unknown'};
  const res={status:200,headers:{'X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY'},data:null};

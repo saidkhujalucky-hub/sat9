@@ -37,7 +37,7 @@ test('free access is enforced on the server, no paid content in catalog or lesso
  const c=await ok('/catalog');assert.equal(c.variants.length,10);assert.ok(c.variants[0].sections);assert.ok(!c.variants[1].sections);assert.equal(c.variants[1].locked,true);
  assert.equal((await req('/exams','POST',{variant:2})).status,403);
  assert.equal((await req('/plan')).status,403);assert.equal((await req('/settings','PUT',{minutes:20})).status,403);
- const ls=await ok('/lessons');assert.equal(ls.length,6);assert.ok(ls.every(l=>!l.rules&&!l.explain));assert.equal(ls.filter(l=>!l.locked).length,2);
+ const ls=await ok('/lessons');assert.equal(ls.length,30);assert.ok(ls.every(l=>!l.rules&&!l.explain&&!l.practice));assert.equal(ls.filter(l=>!l.locked).length,2);
  assert.equal((await req('/lessons/slope')).status,403);assert.equal((await req('/drills','POST',{skill:'slope'})).status,403);
  assert.equal((await ok('/lessons/linear')).id,'linear');
  const guest=await ok('/guest','POST',{},'');assert.ok(guest.token);assert.equal((await req('/exams','POST',{variant:2},guest.token)).status,401);assert.equal((await req('/billing/orders','POST',{idempotencyKey:'guest-attempt-0001'},guest.token)).status,401);

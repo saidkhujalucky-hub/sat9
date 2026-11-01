@@ -14,6 +14,17 @@ ATTEMPT_NOT_FOUND:['Попытка не найдена в этом аккаун�
 SERVER_ERROR:['Не удалось выполнить действие. Попробуй ещё раз.','Amal bajarilmadi. Qayta urinib ko‘ring.','The action could not be completed. Please retry.']
 });
 const index=()=>({ru:0,uz:1,en:2}[SATClient.lang()]??0);
+Object.assign(errors,{
+ MAIL_NOT_CONFIGURED:['Отправка писем пока недоступна. Используй код восстановления.','Email yuborish hali mavjud emas. Tiklash kodidan foydalaning.','Email delivery is not available yet. Use your recovery code.'],
+ MAIL_UNAVAILABLE:['Не удалось отправить письмо. Повтори позже.','Xat yuborilmadi. Keyinroq urinib ko‘ring.','The email could not be sent. Try again later.'],
+ INVALID_RECOVERY:['Неверный или уже использованный код восстановления.','Tiklash kodi noto‘g‘ri yoki ishlatilgan.','Invalid or already used recovery code.'],
+ INVALID_LINK:['Ссылка недействительна или истекла. Запроси новую.','Havola yaroqsiz yoki muddati tugagan. Yangisini so‘rang.','This link is invalid or expired. Request another.'],
+ INVALID_PASSWORD:['Пароль должен содержать от 10 до 128 символов.','Parol 10–128 ta belgidan iborat bo‘lishi kerak.','Use a password with 10–128 characters.'],
+ TRANSLATION_NOT_CONFIGURED:['Перевод пока недоступен. Оригинал и урок по теме доступны ниже.','Tarjima hozircha mavjud emas. Asl matn va mavzu darsi mavjud.','Translation is currently unavailable. The original and topic lesson remain available.'],
+ TRANSLATION_UNAVAILABLE:['Не удалось получить перевод. Повтори позже.','Tarjima olinmadi. Keyinroq urinib ko‘ring.','Translation failed. Try again later.'],
+ TRANSLATION_EXAM_FORBIDDEN:['Перевод доступен в тренировке и после завершения теста.','Tarjima mashqda va test tugagach mavjud.','Translation is available in training and after the test.'],
+ RATE_LIMIT:['Слишком много запросов. Подожди и повтори.','So‘rovlar juda ko‘p. Kutib qayta urinib ko‘ring.','Too many requests. Wait and try again.']
+});
 window.SATI18N={t:key=>(dict[key]||[key,key,key])[index()],error:e=>(errors[e.message]||[e.message,e.message,e.message])[index()],pick:o=>o?.[SATClient.lang()]||o?.en||''};
 window.SATReport=(kind,id)=>{
  const t=SATI18N.t,dialog=document.createElement('dialog');dialog.className='report-dialog';dialog.innerHTML=`<form><h2>${t('report')}</h2><p class="footnote"></p><textarea name="message" required minlength="5" maxlength="3000" rows="5" aria-label="${t('report')}"></textarea><p role="alert"></p><div class="main-actions"><button class="btn primary">${t('send')}</button><button type="button" class="btn ghost">${t('cancel')}</button></div></form>`;
