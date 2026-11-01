@@ -18,3 +18,6 @@ database_name = "sat-platform-db"
 PAYMENT_MODE = "manual"
 PREMIUM_PRICE_UZS = "19000"
 NODE_ENV = "production"
+
+[ai]
+binding = "AI"
