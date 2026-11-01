@@ -1,3 +1,4 @@
+import {extraLessons,extraTopics} from './extra-lessons.mjs';
 // Original lessons and exercises. No claim of College Board authorship.
 export const tri=(ru,uz,en)=>({ru,uz,en});
 const L=(id,section,title,explain,rules,example,mistakes)=>({id,section,title,explain,rules,example,mistakes,minutes:8,source:'Original SAT Practice lesson',ready:true});
@@ -33,4 +34,15 @@ export const lessons=[
  tri(['A library extended its evening hours. Attendance rose, especially among workers.','Две детали: часы продлили; посещаемость выросла среди работающих.','Вывод: более поздние часы сделали библиотеку доступнее работающим. Текст не доказывает, что все библиотеки должны работать ночью.'],['A library extended its evening hours. Attendance rose, especially among workers.','Ikki tafsilot: ish vaqti uzaydi; ishlovchilar ko‘proq keldi.','Xulosa: kechki soatlar ishlovchilarga kutubxonadan foydalanishni osonlashtirdi. Barcha kutubxonalar tunda ishlashi kerakligi isbotlanmagan.'],['A library extended its evening hours. Attendance rose, especially among workers.','Two details: later hours and more visits by workers.','Central idea: later hours improved access for workers. This does not establish a rule for every library.']),
  tri(['Верная отдельная деталь не всегда является главной мыслью.','Не превращай наблюдаемую связь в универсальный закон.'],['To‘g‘ri tafsilot har doim ham asosiy g‘oya bo‘lavermaydi.','Kuzatilgan bog‘liqlikni umumiy qonunga aylantirmang.'],['A true detail is not necessarily the central idea.','Do not turn an observed connection into a universal law.']))
 ];
+const mini={
+ linear:['What is x if 3x + 7 = 22?',['3','5','7','15'],1],
+ slope:['What is the slope through (1, 3) and (5, 11)?',['1/2','2','4','8'],1],
+ percent:['An item costs 80 before a 25% discount. What is the sale price?',['20','25','60','75'],2],
+ transitions:['The forecast predicted rain. ___, the team brought umbrellas.',['However','Therefore','For example','Nevertheless'],1],
+ agreement:['The collection of rare maps ___ on display.',['are','have been','is','were'],2],
+ mainidea:['A library stayed open later, and more workers visited. Which claim is supported?',['Every library must open all night','Later hours improved access for workers','Workers dislike books','All visitors were workers'],1]
+};
+for(const lesson of lessons){const [prompt,options,answer]=mini[lesson.id];lesson.practice={prompt,options,answer,explanation:tri([...lesson.rules.ru,...lesson.example.ru].join(' '),[...lesson.rules.uz,...lesson.example.uz].join(' '),[...lesson.rules.en,...lesson.example.en].join(' '))};}
+lessons.push(...extraLessons);
+export const topicLessons={...extraTopics,'Linear equations in one variable':'linear','Linear functions':'slope','Percentages':'percent','Transitions':'transitions','Central Ideas and Details':'mainidea'};
 export const lessonMap = new Map(lessons.map(l => [l.id, l]));
