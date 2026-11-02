@@ -1,5 +1,5 @@
-# Имя Worker должно совпадать с именем проекта в Cloudflare (у тебя: sat8)
-name = "sat8"
+# Имя Worker должно совпадать с именем проекта в Cloudflare (sat9)
+name = "sat9"
 main = "worker/index.mjs"
 compatibility_date = "2026-10-30"
 compatibility_flags = ["nodejs_compat"]
